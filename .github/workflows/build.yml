@@ -13,8 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Built on the Intel runner: it cross-compiles the arm64 slice (universal binary) and the
+          # installer/load tests below run natively on x86_64. (The macOS arm64 runners were
+          # repeatedly not allocated by GitHub for lack of capacity.)
           - name: macOS (AU + VST3, Universal Intel + Apple Silicon)
-            os: macos-15
+            os: macos-15-intel
           - name: Windows (VST3 + Standalone)
             os: windows-latest
 
@@ -102,7 +105,7 @@ jobs:
           auval -v aumf AuTr Auro
 
       # Load the INSTALLED plugins the way a DAW does (VST3 + AU), process audio, open the window
-      - name: Load installed plugins like a DAW (macOS Apple Silicon)
+      - name: Load installed plugins like a DAW (macOS Intel, native)
         if: runner.os == 'macOS'
         run: |
           uname -m; sw_vers -productVersion
@@ -142,42 +145,11 @@ jobs:
             dist/*.pkg
           if-no-files-found: error
 
-  # Install the released .pkg on an INTEL Mac and load both plugins like a DAW does
-  mac-intel:
-    name: macOS Intel (install .pkg + load like a DAW)
-    needs: build
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: AuroraTrigger-macOS
-          path: dist
-
-      - name: Install the .pkg
-        run: |
-          uname -m; sw_vers -productVersion
-          ls -la dist
-          sudo installer -pkg dist/*.pkg -target /
-          killall -9 AudioComponentRegistrar || true
-
-      - name: Build the loader (native x86_64)
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
-          cmake --build build --config Release --target AuroraTriggerPluginLoadTest --parallel 4
-
-      - name: Load VST3 and AU like a DAW
-        run: |
-          ./build/AuroraTriggerPluginLoadTest_artefacts/Release/AuroraTriggerPluginLoadTest "/Library/Audio/Plug-Ins/VST3/Aurora Trigger.vst3"
-          ./build/AuroraTriggerPluginLoadTest_artefacts/Release/AuroraTriggerPluginLoadTest AU
-          auval -v aumf AuTr Auro | tail -5
-
   # Every push to main creates/updates the release for the version in CMakeLists.txt
   # (bump VERSION there to start a new release). Pushing a v* tag also works.
   release:
     name: Publish GitHub Release
-    needs: [ build, mac-intel ]
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && github.event_name == 'push')
     runs-on: ubuntu-24.04
     permissions:
