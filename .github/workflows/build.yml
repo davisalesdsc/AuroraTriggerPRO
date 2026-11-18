@@ -178,6 +178,42 @@ jobs:
           ls -la dist
           ls dist/*.zip > /dev/null
 
+      # The notes list ONLY the files that were actually built and validated in this run
+      - name: Write release notes
+        run: |
+          {
+            echo "## Downloads"
+            echo
+            echo "| Sistema | Arquivo | O que é |"
+            echo "|---|---|---|"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.pkg" ] && echo "| **macOS Apple Silicon** (M1/M2/M3/M4) | \`AuroraTrigger-$TAG-macOS-arm64.pkg\` | **Instalador** (AU + VST3) — recomendado |"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-intel.pkg" ] && echo "| **macOS Intel** | \`AuroraTrigger-$TAG-macOS-intel.pkg\` | **Instalador** (AU + VST3) — recomendado |"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.zip" ] && echo "| macOS Apple Silicon | \`AuroraTrigger-$TAG-macOS-arm64.zip\` | AU, VST3 e Standalone soltos |"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-intel.zip" ] && echo "| macOS Intel | \`AuroraTrigger-$TAG-macOS-intel.zip\` | AU, VST3 e Standalone soltos |"
+            [ -e "dist/AuroraTrigger-$TAG-Windows.zip" ] && echo "| Windows | \`AuroraTrigger-$TAG-Windows.zip\` | VST3 + Standalone (.exe) |"
+            echo
+            if ls dist/*.pkg > /dev/null 2>&1; then
+              echo "## Instalar no macOS"
+              echo
+              echo "Abra o \`.pkg\` e siga o instalador (ele pede a senha do Mac). O instalador ainda não é"
+              echo "assinado pela Apple, então na primeira vez o macOS bloqueia: vá em **Ajustes do Sistema →"
+              echo "Privacidade e Segurança** e clique em **Abrir Mesmo Assim**. Ou instale pelo Terminal:"
+              echo
+              echo '```'
+              echo "sudo installer -pkg ~/Downloads/<arquivo>.pkg -target /"
+              echo '```'
+              echo
+            fi
+            if [ -e "dist/AuroraTrigger-$TAG-Windows.zip" ]; then
+              echo "## Instalar no Windows"
+              echo
+              echo "Copie a pasta \`Aurora Trigger.vst3\` para \`C:\\Program Files\\Common Files\\VST3\\\` e peça para a DAW"
+              echo "procurar plugins novos (FL Studio: *Options → Manage plugins → Find plugins*)."
+              echo "O \`Aurora Trigger.exe\` é a versão Standalone, não precisa instalar."
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
@@ -189,28 +225,4 @@ jobs:
             dist/*.pkg
             dist/*.zip
           generate_release_notes: true
-          body: |
-            ## Downloads
-
-            | Sistema | Arquivo | O que é |
-            |---|---|---|
-            | **macOS Apple Silicon** (M1/M2/M3/M4) | `AuroraTrigger-${{ env.TAG }}-macOS-arm64.pkg` | **Instalador** (AU + VST3) — recomendado |
-            | **macOS Intel** | `AuroraTrigger-${{ env.TAG }}-macOS-intel.pkg` | **Instalador** (AU + VST3) — recomendado |
-            | macOS | `...-macOS-arm64.zip` / `...-macOS-intel.zip` | AU, VST3 e Standalone soltos |
-            | Windows | `AuroraTrigger-${{ env.TAG }}-Windows.zip` | VST3 + Standalone (.exe) |
-
-            ## Instalar no macOS
-
-            Abra o `.pkg` e siga o instalador (ele pede a senha do Mac). O instalador ainda não é
-            assinado pela Apple, então na primeira vez o macOS bloqueia: vá em **Ajustes do Sistema →
-            Privacidade e Segurança** e clique em **Abrir Mesmo Assim**. Ou instale pelo Terminal:
-
-            ```
-            sudo installer -pkg ~/Downloads/AuroraTrigger-${{ env.TAG }}-macOS-arm64.pkg -target /
-            ```
-
-            ## Instalar no Windows
-
-            Copie a pasta `Aurora Trigger.vst3` para `C:\Program Files\Common Files\VST3\` e peça para a DAW
-            procurar plugins novos (FL Studio: *Options → Manage plugins → Find plugins*).
-            O `Aurora Trigger.exe` é a versão Standalone, não precisa instalar.
+          body_path: release-notes.md
