@@ -4,6 +4,7 @@
 # Usage: packaging/macos/build_pkg.sh <artefacts/Release dir> <version> <output.pkg>
 #   e.g. packaging/macos/build_pkg.sh build/AuroraTrigger_artefacts/Release 0.1.0 dist/AuroraTrigger.pkg
 #
+# Optional: PKG_ARCHS=arm64 | x86_64 restricts the installer to that Mac architecture (default: both).
 # Optional: set INSTALLER_SIGN_IDENTITY="Developer ID Installer: ..." to sign the .pkg.
 
 set -euo pipefail
@@ -56,7 +57,7 @@ build_component () {
 build_component au   "$ART/AU/Aurora Trigger.component" "/Library/Audio/Plug-Ins/Components"
 build_component vst3 "$ART/VST3/Aurora Trigger.vst3" "/Library/Audio/Plug-Ins/VST3"
 
-sed "s/@VERSION@/$VERSION/g" "$HERE/distribution.xml" > "$WORK/distribution.xml"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@ARCHS@/${PKG_ARCHS:-arm64,x86_64}/g" "$HERE/distribution.xml" > "$WORK/distribution.xml"
 
 mkdir -p "$(dirname "$OUT")"
 

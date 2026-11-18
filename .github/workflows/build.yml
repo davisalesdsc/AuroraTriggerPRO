@@ -13,20 +13,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Built on the Intel runner: it cross-compiles the arm64 slice (universal binary) and the
-          # installer/load tests below run natively on x86_64. (The macOS arm64 runners were
-          # repeatedly not allocated by GitHub for lack of capacity.)
-          - name: macOS (AU + VST3, Universal Intel + Apple Silicon)
+          # One native build per Mac architecture (separate installers), plus Windows
+          - name: macOS Apple Silicon (arm64)
+            os: macos-15
+            label: macOS-arm64
+            arch: arm64
+            minos: "11.0"
+          - name: macOS Intel (x86_64)
             os: macos-15-intel
+            label: macOS-intel
+            arch: x86_64
+            minos: "10.13"
           - name: Windows (VST3 + Standalone)
             os: windows-latest
+            label: Windows
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
         shell: bash
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: |
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            MAC="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ matrix.minos }}"
+          fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release $MAC
 
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -43,8 +54,8 @@ jobs:
           echo "PROJECT_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "label=$LABEL version=$VERSION"
 
-      # Both architectures must be inside every binary
-      - name: Check universal binary (macOS)
+      # The binaries must contain exactly this job's architecture, and require no newer macOS than intended
+      - name: Check architecture and minimum macOS version (macOS)
         if: runner.os == 'macOS'
         run: |
           A=build/AuroraTrigger_artefacts/Release
@@ -53,27 +64,15 @@ jobs:
                      "$A/Standalone/Aurora Trigger.app/Contents/MacOS/Aurora Trigger"; do
             archs=$(lipo -archs "$bin")
             echo "$bin: $archs"
-            case "$archs" in *x86_64*arm64*|*arm64*x86_64*) ;; *) echo "::error::not universal: $bin ($archs)"; exit 1 ;; esac
-          done
-
-      # Fails the build if the plugin would require a newer macOS than intended
-      # (x86_64: 10.13; arm64: 11.0, the first macOS for Apple Silicon)
-      - name: Check minimum macOS version
-        if: runner.os == 'macOS'
-        run: |
-          A=build/AuroraTrigger_artefacts/Release
-          for bin in "$A/VST3/Aurora Trigger.vst3/Contents/MacOS/Aurora Trigger" \
-                     "$A/AU/Aurora Trigger.component/Contents/MacOS/Aurora Trigger"; do
-            for arch in x86_64 arm64; do
-              # LC_BUILD_VERSION prints "minos X"; older targets (10.13) use LC_VERSION_MIN_MACOSX ("version X")
-              minos=$(vtool -arch $arch -show-build "$bin" | awk '$1 == "minos" || $1 == "version" {print $2; exit}')
-              if [ -z "$minos" ]; then echo "::error::could not read the minimum macOS of $bin [$arch]"; exit 1; fi
-              echo "$bin [$arch] minos=$minos"
-              limit=10.13; [ "$arch" = arm64 ] && limit=11.0
-              if [ "$(printf '%s\n%s\n' "$minos" "$limit" | sort -V | tail -1)" != "$limit" ]; then
-                echo "::error::$arch requires macOS $minos (expected <= $limit)"; exit 1
-              fi
-            done
+            if [ "$archs" != "${{ matrix.arch }}" ]; then echo "::error::expected ${{ matrix.arch }}, got $archs: $bin"; exit 1; fi
+            # LC_BUILD_VERSION prints "minos X"; older targets (10.13) use LC_VERSION_MIN_MACOSX ("version X")
+            minos=$(vtool -arch ${{ matrix.arch }} -show-build "$bin" | awk '$1 == "minos" || $1 == "version" {print $2; exit}')
+            echo "minos=$minos"
+            if [ -z "$minos" ]; then echo "::error::could not read the minimum macOS of $bin"; exit 1; fi
+            limit=${{ matrix.minos }}
+            if [ "$(printf '%s\n%s\n' "$minos" "$limit" | sort -V | tail -1)" != "$limit" ]; then
+              echo "::error::requires macOS $minos (expected <= $limit)"; exit 1
+            fi
           done
 
       # Ad-hoc signature so Apple Silicon hosts load the bundles (no Apple account needed)
@@ -89,14 +88,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           chmod +x packaging/macos/build_pkg.sh packaging/macos/scripts-au/postinstall
-          packaging/macos/build_pkg.sh build/AuroraTrigger_artefacts/Release "$PROJECT_VERSION" \
-            "dist/AuroraTrigger-$VERSION_LABEL-macOS.pkg"
+          PKG_ARCHS=${{ matrix.arch }} packaging/macos/build_pkg.sh build/AuroraTrigger_artefacts/Release "$PROJECT_VERSION" \
+            "dist/AuroraTrigger-$VERSION_LABEL-${{ matrix.label }}.pkg"
 
       # Install the .pkg exactly like a user would, then validate the installed plugin
       - name: Test installer + validate AU (auval)
         if: runner.os == 'macOS'
         run: |
-          sudo installer -pkg "dist/AuroraTrigger-$VERSION_LABEL-macOS.pkg" -target /
+          sudo installer -pkg "dist/AuroraTrigger-$VERSION_LABEL-${{ matrix.label }}.pkg" -target /
           test -d "/Library/Audio/Plug-Ins/Components/Aurora Trigger.component"
           test -d "/Library/Audio/Plug-Ins/VST3/Aurora Trigger.vst3"
           pkgutil --pkgs | grep com.auroraaudio.auroratrigger
@@ -105,7 +104,7 @@ jobs:
           auval -v aumf AuTr Auro
 
       # Load the INSTALLED plugins the way a DAW does (VST3 + AU), process audio, open the window
-      - name: Load installed plugins like a DAW (macOS Intel, native)
+      - name: Load installed plugins like a DAW (macOS, native)
         if: runner.os == 'macOS'
         run: |
           uname -m; sw_vers -productVersion
@@ -122,7 +121,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          NAME="AuroraTrigger-$VERSION_LABEL-$RUNNER_OS"
+          NAME="AuroraTrigger-$VERSION_LABEL-${{ matrix.label }}"
           mkdir -p "dist/$NAME"
           for f in "AU/Aurora Trigger.component" "VST3/Aurora Trigger.vst3" "Standalone/Aurora Trigger.app" "Standalone/Aurora Trigger.exe"; do
             src="build/AuroraTrigger_artefacts/Release/$f"
@@ -139,7 +138,7 @@ jobs:
       - name: Upload plugins
         uses: actions/upload-artifact@v4
         with:
-          name: AuroraTrigger-${{ runner.os }}
+          name: AuroraTrigger-${{ matrix.label }}
           path: |
             dist/*.zip
             dist/*.pkg
@@ -150,7 +149,9 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && github.event_name == 'push')
+    # !cancelled(): publish even if one platform's runner was unavailable. An artifact is only uploaded
+    # after ALL of that platform's checks passed, so the release holds only validated builds.
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && github.event_name == 'push')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -172,7 +173,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - run: ls -la dist
+      - name: Check there is something to publish
+        run: |
+          ls -la dist
+          ls dist/*.zip > /dev/null
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -190,8 +194,9 @@ jobs:
 
             | Sistema | Arquivo | O que é |
             |---|---|---|
-            | **macOS** (Apple Silicon + Intel, universal) | `AuroraTrigger-${{ env.TAG }}-macOS.pkg` | **Instalador** (AU + VST3) — recomendado |
-            | macOS | `AuroraTrigger-${{ env.TAG }}-macOS.zip` | AU, VST3 e Standalone soltos |
+            | **macOS Apple Silicon** (M1/M2/M3/M4) | `AuroraTrigger-${{ env.TAG }}-macOS-arm64.pkg` | **Instalador** (AU + VST3) — recomendado |
+            | **macOS Intel** | `AuroraTrigger-${{ env.TAG }}-macOS-intel.pkg` | **Instalador** (AU + VST3) — recomendado |
+            | macOS | `...-macOS-arm64.zip` / `...-macOS-intel.zip` | AU, VST3 e Standalone soltos |
             | Windows | `AuroraTrigger-${{ env.TAG }}-Windows.zip` | VST3 + Standalone (.exe) |
 
             ## Instalar no macOS
@@ -201,7 +206,7 @@ jobs:
             Privacidade e Segurança** e clique em **Abrir Mesmo Assim**. Ou instale pelo Terminal:
 
             ```
-            sudo installer -pkg ~/Downloads/AuroraTrigger-${{ env.TAG }}-macOS.pkg -target /
+            sudo installer -pkg ~/Downloads/AuroraTrigger-${{ env.TAG }}-macOS-arm64.pkg -target /
             ```
 
             ## Instalar no Windows

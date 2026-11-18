@@ -4,8 +4,8 @@
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
 
-    <!-- Native on Apple Silicon and Intel (no Rosetta prompt) -->
-    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <!-- Host architecture of this installer: arm64 (Apple Silicon) or x86_64 (Intel) -->
+    <options customize="allow" require-scripts="false" hostArchitectures="@ARCHS@"/>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
 
     <choices-outline>
