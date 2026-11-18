@@ -4,20 +4,43 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
 #include <array>
-#include <vector>
 #include <atomic>
+#include <memory>
+#include <vector>
+
+// Samples of one slot: velocity layers (soft -> loud), each with its round robins.
+// Built off the audio thread, then swapped in under the slot lock; never modified after.
+struct SampleSet
+{
+    std::vector<std::vector<juce::AudioBuffer<float>>> layers;
+    double sampleRate = 44100.0;
+
+    int numHits() const
+    {
+        int n = 0;
+        for (const auto& l : layers)
+            n += (int) l.size();
+        return n;
+    }
+};
 
 struct SampleSlot
 {
-    juce::AudioBuffer<float> buffer;
-    double sampleRate = 44100.0;
+    std::unique_ptr<const SampleSet> samples;   // null = empty slot
     juce::String articulationName { "Empty" };
     juce::String micLabel { "Empty" };
-    bool loaded = false;
 
+    // Where the sound came from, saved with the session: "empty", "default" or "file"
+    juce::String sourceType { "empty" };
+    juce::File sourceFile;
+
+    // Voice (audio thread only, under the slot lock)
     bool isPlaying = false;
+    const juce::AudioBuffer<float>* voiceBuffer = nullptr;
     double playPosition = 0.0;
-    float currentVelocity = 1.0f;
+    float currentVelocity = 1.0f; // gain from the dynamics curve
+    juce::int64 envelopeSamples = 0;
+    std::vector<int> layerRoundRobin; // next round robin per velocity layer (sized when samples are installed)
 };
 
 class AuroraTriggerAudioProcessor : public juce::AudioProcessor
@@ -56,16 +79,49 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Sample & Kit Management
-    bool loadSampleIntoSlot (int slotIndex, const juce::File& file);
-    void clearSlot (int slotIndex);
+    //==============================================================================
+    // Slots
+    struct SlotInfo
+    {
+        bool loaded = false;
+        bool loading = false;
+        juce::String micLabel { "Empty" };
+        juce::String articulationName { "Empty" };
+        juce::String error;      // last load error, if any
+        int numLayers = 0;
+        int numHits = 0;
+    };
+
+    SlotInfo getSlotInfo (int slotIndex) const;
+
+    // .wav / .aif / .aiff / .flac / .tci
+    static bool isSupportedFile (const juce::File& file);
+    static juce::String supportedWildcard() { return "*.wav;*.aif;*.aiff;*.flac;*.tci"; }
+
+    // Loads on a background thread; the slot keeps playing its old sound until the new one is ready.
+    void loadFileIntoSlotAsync (int slotIndex, const juce::File& file);
+    bool waitForPendingLoads (int timeoutMs);
+
+    // Clears the slot and resets all of its parameters to their initial values ("Init").
+    void initSlot (int slotIndex);
+
     void triggerAudition (int slotIndex, float velocity = 0.88f);
     void flipAllPhases();
     void loadDefaultChilliSnareKit();
 
-    // Link Tune Helper
-    void applyLinkedTune (int sourceSlot, float newTuneValue);
+    //==============================================================================
+    // Linked parameters (Link Tune + Curve Link): moving one slot's control moves all slots.
+    // `suffix` is the per-slot parameter name: tune, att, sus, rel, dyn, vel, rmin, rmax.
+    void applyLinkedSlotParam (const juce::String& suffix, int sourceSlot, float newValue);
+    void applyLinkedTune (int sourceSlot, float newTuneValue) { applyLinkedSlotParam ("tune", sourceSlot, newTuneValue); }
+    static juce::String linkParamIdFor (const juce::String& suffix);
 
+    // Curves: input velocity (0..1) -> output velocity (0..127), and output velocity -> gain.
+    // velCurve 50 = linear, above 50 boosts soft hits, below 50 favours hard hits.
+    static float mapVelocity (float input01, float velCurve, float rangeMin, float rangeMax);
+    static float dynamicsGain (float outputVelocity, float dynamicsPercent);
+
+    //==============================================================================
     // MIDI Capture & Drag-to-Track
     void setMidiRecording (bool shouldRecord);
     bool isMidiRecording() const { return midiRecording.load(); }
@@ -83,16 +139,46 @@ public:
     juce::String activePresetName { "Chilli Snare" };
 
     juce::AudioProcessorValueTreeState apvts;
-    std::array<SampleSlot, numSlots> slots;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateLatencyFromMode (int modeIndex);
     void triggerAllActiveSlots (float velocity);
-    void synthesizeDemoSnareMic (int slotIndex, const juce::String& artName, const juce::String& micName, float pitchHz, float noiseAmt, float roomDecay);
+    void triggerSlot (int slotIndex, float velocity01);
+    void synthesizeDemoSnareMic (int slotIndex);
+    void installSamples (int slotIndex, std::unique_ptr<const SampleSet> set, const juce::String& art,
+                         const juce::String& mic, const juce::String& type, const juce::File& file);
+    void clearSlotSamples (int slotIndex);
+    std::unique_ptr<const SampleSet> buildSampleSet (const juce::File& file, juce::String& art, juce::String& error);
+    void setParamValue (const juce::String& paramId, float value);
+
+    struct SlotParams
+    {
+        std::atomic<float>* vol = nullptr;
+        std::atomic<float>* pan = nullptr;
+        std::atomic<float>* tune = nullptr;
+        std::atomic<float>* solo = nullptr;
+        std::atomic<float>* mute = nullptr;
+        std::atomic<float>* phase = nullptr;
+        std::atomic<float>* att = nullptr;
+        std::atomic<float>* sus = nullptr;
+        std::atomic<float>* rel = nullptr;
+        std::atomic<float>* dyn = nullptr;
+        std::atomic<float>* vel = nullptr;
+        std::atomic<float>* rmin = nullptr;
+        std::atomic<float>* rmax = nullptr;
+    };
+    std::array<SlotParams, numSlots> slotParams;
 
     juce::AudioFormatManager formatManager;
     juce::CriticalSection slotLock;
+    std::array<SampleSlot, numSlots> slots;
+
+    // Background loading
+    juce::ThreadPool loaderPool { 1 };
+    std::array<std::atomic<int>, numSlots> loadGeneration {};
+    std::array<std::atomic<int>, numSlots> pendingLoads {};
+    std::array<juce::String, numSlots> slotErrors; // guarded by slotLock
 
     juce::dsp::IIR::Filter<float> lowcutFilter;
     juce::dsp::IIR::Filter<float> highcutFilter;
@@ -116,7 +202,7 @@ private:
     juce::CriticalSection midiLock;
 
     int lastLatencyMode = -1;
-    bool isSyncingLinkedTune = false;
+    bool isSyncingLinkedParam = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AuroraTriggerAudioProcessor)
 };

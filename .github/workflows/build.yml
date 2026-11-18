@@ -40,6 +40,14 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel 4
 
+      # TCI decoding (synthetic fixtures), velocity layers / round robin, curves, slot Init, session state, editor
+      - name: Run offline tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then T=./build/AuroraTriggerTests_artefacts/Release/AuroraTriggerTests.exe
+          else T=./build/AuroraTriggerTests_artefacts/Release/AuroraTriggerTests; fi
+          "$T"
+
       - name: Resolve version
         shell: bash
         run: |

@@ -14,6 +14,7 @@ public:
     void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
                            float sliderPos, float minSliderPos, float maxSliderPos,
                            const juce::Slider::SliderStyle style, juce::Slider& slider) override;
+    juce::Label* createSliderTextBox (juce::Slider& slider) override;
 };
 
 class LedMeterComponent : public juce::Component
@@ -39,8 +40,66 @@ private:
     AuroraTriggerAudioProcessor& processor;
 };
 
+// Curves view: amplitude envelope of one slot (Attack / Sustain / Release)
+class EnvelopeDisplay : public juce::Component
+{
+public:
+    EnvelopeDisplay (AuroraTriggerAudioProcessor& p, int slot) : processor (p), slotIndex (slot) {}
+    void paint (juce::Graphics& g) override;
+
+private:
+    AuroraTriggerAudioProcessor& processor;
+    int slotIndex;
+};
+
+// Curves view: input velocity -> output velocity (orange) and resulting level (blue)
+class VelocityCurveDisplay : public juce::Component
+{
+public:
+    VelocityCurveDisplay (AuroraTriggerAudioProcessor& p, int slot) : processor (p), slotIndex (slot) {}
+    void paint (juce::Graphics& g) override;
+
+private:
+    AuroraTriggerAudioProcessor& processor;
+    int slotIndex;
+};
+
+// Bottom trigger pad: left click = audition / load, right click = menu,
+// accepts files dragged from the browser or from Finder / Explorer.
+class PadButton : public juce::TextButton,
+                  public juce::DragAndDropTarget,
+                  public juce::FileDragAndDropTarget
+{
+public:
+    static constexpr const char* browserDragId = "AuroraBrowserFile";
+
+    std::function<void()> onRightClick;
+    std::function<void (const juce::File&)> onFileDropped;
+    std::function<juce::File()> getBrowserSelection;
+
+    void mouseDown (const juce::MouseEvent& e) override;
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override;
+
+    bool isInterestedInDragSource (const SourceDetails& details) override;
+    void itemDragEnter (const SourceDetails&) override { setDropHover (true); }
+    void itemDragExit (const SourceDetails&) override { setDropHover (false); }
+    void itemDropped (const SourceDetails& details) override;
+
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray&, int, int) override { setDropHover (true); }
+    void fileDragExit (const juce::StringArray&) override { setDropHover (false); }
+    void filesDropped (const juce::StringArray& files, int, int) override;
+
+    bool slotLoaded = false;
+
+private:
+    void setDropHover (bool h) { dropHover = h; repaint(); }
+    bool dropHover = false;
+};
+
 class AuroraTriggerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                           public juce::DragAndDropContainer,
+                                          private juce::FileBrowserListener,
                                           private juce::Timer
 {
 public:
@@ -53,17 +112,29 @@ public:
 private:
     void timerCallback() override;
     void setActiveTab (int tabIndex);
+    void setLowerView (int view); // 0 = mixer, 1 = curves
+    void selectSlot (int slotIndex);
     void loadSampleViaChooser (int slotIndex);
+    void loadFileIntoSlot (int slotIndex, const juce::File& file);
+    void showPadMenu (int slotIndex);
     void dragCapturedMidiToDaw();
+
+    // Browser
+    void setBrowserRoot (const juce::File& folder);
+    void chooseBrowserFolder();
+    void selectionChanged() override {}
+    void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
+    void fileDoubleClicked (const juce::File& file) override;
+    void browserRootChanged (const juce::File&) override {}
 
     AuroraTriggerAudioProcessor& audioProcessor;
     AuroraMetallicLookAndFeel metallicLnf;
 
     int activeViewTab = 1; // 0 = Browser, 1 = Triggering, 2 = Settings
-    bool mixerVisible = true;
+    int lowerView = 0;     // 0 = mixer, 1 = curves
     int selectedSlot = 0;
 
-    // Left Navigation Column (Exact Layout Order)
+    // Left Navigation Column
     juce::TextButton browserBtn     { "Browser" };
     juce::TextButton triggeringBtn  { "Triggering" };
     juce::TextButton settingsBtn    { "Settings" };
@@ -79,6 +150,15 @@ private:
     juce::TextButton clearBufferBtn { "CLEAR BUFFER" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkTuneAtt;
+
+    // Curve Link (shown in the curves view)
+    struct CurveLinkRow
+    {
+        juce::String label;
+        juce::TextButton button { "Off" };
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+    };
+    std::array<CurveLinkRow, 7> curveLinks;
 
     // Top Triggering Controls
     juce::ToggleButton gateOnBtn { "On" };
@@ -98,11 +178,22 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lowcutAtt, highcutAtt, suppressAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sensAtt, retrigAtt, detailAtt, outVolAtt, mixAtt;
 
-    // Browser & Settings Views
-    juce::TextButton loadSampleBtn { "Load .WAV / .AIFF into Slot" };
+    // Browser view: a folder tree that stays on screen
+    juce::TimeSliceThread browserThread { "Aurora Trigger browser" };
+    juce::WildcardFileFilter browserFilter { AuroraTriggerAudioProcessor::supportedWildcard(), "*", "Drum samples and TCI" };
+    juce::DirectoryContentsList browserList { &browserFilter, browserThread };
+    juce::FileTreeComponent browserTree { browserList };
+    juce::TextButton chooseFolderBtn { "Choose Folder..." };
+    juce::TextButton parentFolderBtn { "Up" };
+    juce::Label browserPathLabel;
+    juce::Label browserTargetLabel;
+    juce::Label browserInfoLabel;
+    juce::TextButton loadSelectedBtn { "Load Selected Into Slot" };
+    juce::TextButton loadSampleBtn { "Load File..." };
     juce::TextButton auditionSlotBtn { "Audition Selected Slot" };
     juce::TextButton resetChilliKitBtn { "Reload Chilli Snare Kit" };
-    juce::Label browserViewLabel;
+    std::unique_ptr<juce::PropertiesFile> userSettings;
+
     juce::Label settingsViewLabel;
 
     // 8-Channel Mixer Strips with Bottom Trigger Pads
@@ -117,12 +208,24 @@ private:
         juce::TextButton muteBtn  { "M" };
         juce::TextButton phaseBtn { juce::String (juce::CharPointer_UTF8 ("\xc3\x98")) }; // O with stroke (phase)
         juce::Label  artLabel;
-        juce::TextButton bottomPadBtn { "Empty" };
+        PadButton bottomPadBtn;
 
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> panAtt, tuneAtt, volAtt;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> soloAtt, muteAtt, phaseAtt;
     };
     std::array<MixerStripUI, AuroraTriggerAudioProcessor::numSlots> strips;
+
+    // Curves view strips (Trigger 2 style)
+    struct CurveStripUI
+    {
+        CurveStripUI (AuroraTriggerAudioProcessor& p, int slot) : envelope (p, slot), velocityCurve (p, slot) {}
+
+        EnvelopeDisplay envelope;
+        VelocityCurveDisplay velocityCurve;
+        juce::Slider attSlider, susSlider, relSlider, dynSlider, velSlider, rminSlider, rmaxSlider;
+        std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
+    };
+    std::array<std::unique_ptr<CurveStripUI>, AuroraTriggerAudioProcessor::numSlots> curveStrips;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 

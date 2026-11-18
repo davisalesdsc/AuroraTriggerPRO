@@ -8,7 +8,7 @@ set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal binary (Apple
 # Windows: link the MSVC runtime statically (no VC++ Redistributable needed on the user's PC)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "MSVC runtime")
 
-project(AuroraTrigger VERSION 0.2.0 LANGUAGES C CXX)
+project(AuroraTrigger VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,10 +51,12 @@ juce_add_plugin(AuroraTrigger
     VST3_CATEGORIES Fx
     AU_MAIN_TYPE kAudioUnitType_MusicEffect)
 
-target_sources(AuroraTrigger
-    PRIVATE
-        Source/PluginProcessor.cpp
-        Source/PluginEditor.cpp)
+set(AURORA_SOURCES
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/TciDecoder.cpp)
+
+target_sources(AuroraTrigger PRIVATE ${AURORA_SOURCES})
 
 target_compile_definitions(AuroraTrigger
     PUBLIC
@@ -83,6 +85,28 @@ target_link_libraries(AuroraTrigger
 option(AURORA_BUILD_TESTS "Build the plugin load test" ON)
 
 if(AURORA_BUILD_TESTS)
+    # Offline tests: TCI decoding (synthetic fixtures) + processor behaviour
+    juce_add_console_app(AuroraTriggerTests PRODUCT_NAME "AuroraTriggerTests")
+    target_sources(AuroraTriggerTests PRIVATE
+        Tests/AuroraTriggerTests.cpp
+        Tests/ProcessorTests.cpp
+        ${AURORA_SOURCES})
+    target_compile_definitions(AuroraTriggerTests PRIVATE
+        JucePlugin_Name="Aurora Trigger"
+        JucePlugin_VersionString="${PROJECT_VERSION}"
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+    if(MSVC)
+        target_compile_options(AuroraTriggerTests PRIVATE /utf-8)
+    endif()
+    target_link_libraries(AuroraTriggerTests PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
     juce_add_console_app(AuroraTriggerPluginLoadTest PRODUCT_NAME "AuroraTriggerPluginLoadTest")
     target_sources(AuroraTriggerPluginLoadTest PRIVATE Tests/PluginLoadTest.cpp)
     target_compile_definitions(AuroraTriggerPluginLoadTest PRIVATE
