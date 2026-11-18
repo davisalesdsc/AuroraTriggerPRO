@@ -13,17 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Only the macos-26-intel runner pool was being allocated by GitHub (arm64 pools sat
-          # unassigned for 15+ min), so BOTH Mac installers are built there. The arm64 one is
-          # cross-compiled: it is checked statically (arch, min macOS, signature, installer) but
-          # cannot be executed on an Intel runner (native: false skips the run-time tests).
-          # If an arm64 runner is available, set os: macos-26 and native: true for that entry.
-          - name: macOS Apple Silicon (arm64, cross-compiled)
-            os: macos-26-intel
-            label: macOS-arm64
-            arch: arm64
-            minos: "11.0"
-            native: false
+          # macOS: a single installer, for Intel Macs (x86_64), built and tested natively.
+          # (macos-26-intel is the only Mac runner pool GitHub was reliably allocating.)
           - name: macOS Intel (x86_64)
             os: macos-26-intel
             label: macOS-intel
@@ -193,9 +184,7 @@ jobs:
             echo
             echo "| Sistema | Arquivo | O que é |"
             echo "|---|---|---|"
-            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.pkg" ] && echo "| **macOS Apple Silicon** (M1/M2/M3/M4) | \`AuroraTrigger-$TAG-macOS-arm64.pkg\` | **Instalador** (AU + VST3) — compilado em CI, ainda não executado em máquina Apple Silicon |"
-            [ -e "dist/AuroraTrigger-$TAG-macOS-intel.pkg" ] && echo "| **macOS Intel** | \`AuroraTrigger-$TAG-macOS-intel.pkg\` | **Instalador** (AU + VST3) — recomendado |"
-            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.zip" ] && echo "| macOS Apple Silicon | \`AuroraTrigger-$TAG-macOS-arm64.zip\` | AU, VST3 e Standalone soltos |"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-intel.pkg" ] && echo "| **macOS** (Intel x86_64) | \`AuroraTrigger-$TAG-macOS-intel.pkg\` | **Instalador** (AU + VST3) — recomendado |"
             [ -e "dist/AuroraTrigger-$TAG-macOS-intel.zip" ] && echo "| macOS Intel | \`AuroraTrigger-$TAG-macOS-intel.zip\` | AU, VST3 e Standalone soltos |"
             [ -e "dist/AuroraTrigger-$TAG-Windows.zip" ] && echo "| Windows | \`AuroraTrigger-$TAG-Windows.zip\` | VST3 + Standalone (.exe) |"
             echo
