@@ -140,7 +140,7 @@ void WaveformScopeComponent::paint (juce::Graphics& g)
     // Preset Header ("Chilli Snare")
     g.setColour (juce::Colour (0xffcbd5e1));
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawText (processor.activePresetName, static_cast<int> (bounds.getX() + 8), static_cast<int> (bounds.getY() + 4), 180, 16, juce::Justification::left);
+    g.drawText (processor.getPresetName(), static_cast<int> (bounds.getX() + 8), static_cast<int> (bounds.getY() + 4), 180, 16, juce::Justification::left);
 
     int readPos = processor.scopeWritePos.load();
     float stepX = bounds.getWidth() / static_cast<float> (AuroraTriggerAudioProcessor::scopeSize);
@@ -423,7 +423,10 @@ AuroraTriggerAudioProcessorEditor::AuroraTriggerAudioProcessorEditor (AuroraTrig
     addAndMakeVisible (flipPhasesBtn);
     flipPhasesBtn.onClick = [this] { audioProcessor.flipAllPhases(); };
 
+    addAndMakeVisible (loadPresetBtn);
     addAndMakeVisible (savePresetBtn);
+    loadPresetBtn.onClick = [this] { showPresetMenu(); };
+    savePresetBtn.onClick = [this] { savePresetDialog(); };
     addAndMakeVisible (dragOnTrackBtn);
     addAndMakeVisible (clearBufferBtn);
     dragOnTrackBtn.onClick = [this] { dragCapturedMidiToDaw(); };
@@ -728,6 +731,7 @@ void AuroraTriggerAudioProcessorEditor::setLowerView (int view)
 
     linkTuneBtn.setVisible (mixer);
     flipPhasesBtn.setVisible (mixer);
+    loadPresetBtn.setVisible (mixer);
     savePresetBtn.setVisible (mixer);
     for (auto& row : curveLinks)
         row.button.setVisible (! mixer);
@@ -826,8 +830,122 @@ void AuroraTriggerAudioProcessorEditor::chooseBrowserFolder()
 void AuroraTriggerAudioProcessorEditor::fileDoubleClicked (const juce::File& file)
 {
     // Folders just open in place (the tree keeps the list on screen); files load.
-    if (file.existsAsFile())
+    if (! file.existsAsFile())
+        return;
+    if (file.hasFileExtension (AuroraTriggerAudioProcessor::presetExtension))
+        loadPresetFile (file);
+    else
         loadFileIntoSlot (selectedSlot, file);
+}
+
+//==============================================================================
+// Presets
+void AuroraTriggerAudioProcessorEditor::showError (const juce::String& title, const juce::String& message)
+{
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                      .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                      .withTitle (title)
+                                      .withMessage (message)
+                                      .withButton ("OK")
+                                      .withAssociatedComponent (this),
+                                  nullptr);
+}
+
+void AuroraTriggerAudioProcessorEditor::savePresetDialog()
+{
+    const auto folder = AuroraTriggerAudioProcessor::getPresetsFolder();
+    folder.createDirectory();
+    const auto suggested = folder.getChildFile (juce::File::createLegalFileName (audioProcessor.getPresetName()))
+                               .withFileExtension (AuroraTriggerAudioProcessor::presetExtension);
+
+    fileChooser = std::make_unique<juce::FileChooser> ("Save Aurora Trigger Preset", suggested, "*.atpreset");
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
+                            | juce::FileBrowserComponent::canSelectFiles
+                            | juce::FileBrowserComponent::warnAboutOverwriting;
+
+    juce::Component::SafePointer<AuroraTriggerAudioProcessorEditor> safe (this);
+    fileChooser->launchAsync (chooserFlags, [safe] (const juce::FileChooser& fc)
+    {
+        const auto file = fc.getResult();
+        if (safe == nullptr || file == juce::File())
+            return;
+
+        juce::String error;
+        if (! safe->audioProcessor.savePreset (file, error))
+        {
+            safe->showError ("Preset not saved", error);
+            return;
+        }
+
+        safe->savePresetBtn.setButtonText ("SAVED!");
+        juce::Timer::callAfterDelay (1500, [safe]
+        {
+            if (safe != nullptr)
+                safe->savePresetBtn.setButtonText ("SAVE PRESET");
+        });
+        safe->waveformScope.repaint();
+    });
+}
+
+void AuroraTriggerAudioProcessorEditor::loadPresetFile (const juce::File& file)
+{
+    juce::String error;
+    if (! audioProcessor.loadPreset (file, error))
+        showError ("Preset not loaded", error);
+    waveformScope.repaint();
+}
+
+void AuroraTriggerAudioProcessorEditor::showPresetMenu()
+{
+    const auto folder = AuroraTriggerAudioProcessor::getPresetsFolder();
+    auto files = folder.findChildFiles (juce::File::findFiles, true, "*.atpreset");
+    std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+    {
+        return a.getFullPathName().compareNatural (b.getFullPathName()) < 0;
+    });
+
+    const auto current = audioProcessor.getPresetName();
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Presets");
+    if (files.isEmpty())
+        menu.addItem (-1, "(no presets saved yet)", false);
+    for (int i = 0; i < files.size(); ++i)
+    {
+        const auto name = files[i].getRelativePathFrom (folder).upToLastOccurrenceOf (".", false, false);
+        menu.addItem (100 + i, name, true, files[i].getFileNameWithoutExtension() == current);
+    }
+    menu.addSeparator();
+    menu.addItem (1, "Load From File...");
+    menu.addItem (2, "Open Presets Folder");
+
+    juce::Component::SafePointer<AuroraTriggerAudioProcessorEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadPresetBtn),
+                        [safe, files, folder] (int result)
+    {
+        if (safe == nullptr || result == 0)
+            return;
+
+        if (result >= 100 && result - 100 < files.size())
+        {
+            safe->loadPresetFile (files[result - 100]);
+        }
+        else if (result == 1)
+        {
+            safe->fileChooser = std::make_unique<juce::FileChooser> ("Load Aurora Trigger Preset", folder, "*.atpreset");
+            safe->fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                            [safe] (const juce::FileChooser& fc)
+            {
+                const auto file = fc.getResult();
+                if (safe != nullptr && file.existsAsFile())
+                    safe->loadPresetFile (file);
+            });
+        }
+        else if (result == 2)
+        {
+            folder.createDirectory();
+            folder.startAsProcess();
+        }
+    });
 }
 
 void AuroraTriggerAudioProcessorEditor::dragCapturedMidiToDaw()
@@ -1009,8 +1127,9 @@ void AuroraTriggerAudioProcessorEditor::resized()
     viewMixerBtn.setBounds   (lx, 268, lw, 28);
     viewCurvesBtn.setBounds  (lx, 304, lw, 28);
 
-    linkTuneBtn.setBounds    (lx, 434, lw, 26);
-    flipPhasesBtn.setBounds  (lx, 468, lw, 26);
+    linkTuneBtn.setBounds    (lx, 400, lw, 26);
+    flipPhasesBtn.setBounds  (lx, 434, lw, 26);
+    loadPresetBtn.setBounds  (lx, 468, lw, 26);
     savePresetBtn.setBounds  (lx, 502, lw, 26);
 
     for (size_t r = 0; r < curveLinks.size(); ++r)

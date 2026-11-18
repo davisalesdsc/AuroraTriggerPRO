@@ -106,6 +106,15 @@ public:
     void initSlot (int slotIndex);
 
     void triggerAudition (int slotIndex, float velocity = 0.88f);
+
+    //==============================================================================
+    // Presets: .atpreset files hold every parameter plus the file loaded in each slot.
+    static constexpr const char* presetExtension = ".atpreset";
+    static juce::File getPresetsFolder(); // Documents/Aurora Trigger/Presets
+    bool savePreset (const juce::File& file, juce::String& error);
+    bool loadPreset (const juce::File& file, juce::String& error);
+    juce::String getPresetName() const;
+    void setPresetName (const juce::String& name);
     void flipAllPhases();
     void loadDefaultChilliSnareKit();
 
@@ -136,12 +145,13 @@ public:
     std::atomic<float> inputLevelDb { -60.0f };
     std::atomic<float> outputLevelDb { -60.0f };
     std::atomic<bool> gateOpenState { false };
-    juce::String activePresetName { "Chilli Snare" };
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    juce::ValueTree createStateTree();
+    bool applyStateTree (juce::ValueTree tree);
     void updateLatencyFromMode (int modeIndex);
     void triggerAllActiveSlots (float velocity);
     void triggerSlot (int slotIndex, float velocity01);
@@ -200,6 +210,9 @@ private:
     double totalSamplesElapsed = 0.0;
     juce::MidiMessageSequence capturedSequence;
     juce::CriticalSection midiLock;
+
+    juce::String presetName { "Chilli Snare" };
+    juce::CriticalSection presetNameLock;
 
     int lastLatencyMode = -1;
     bool isSyncingLinkedParam = false;

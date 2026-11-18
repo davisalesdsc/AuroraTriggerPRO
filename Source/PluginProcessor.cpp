@@ -263,7 +263,7 @@ void AuroraTriggerAudioProcessor::synthesizeDemoSnareMic (int slotIndex)
 
 void AuroraTriggerAudioProcessor::loadDefaultChilliSnareKit()
 {
-    activePresetName = "Chilli Snare";
+    setPresetName ("Chilli Snare");
     for (int i = 0; i < numDemoMics; ++i)
     {
         ++loadGeneration[(size_t) i]; // a pending file load must not overwrite the kit
@@ -841,11 +841,13 @@ juce::AudioProcessorEditor* AuroraTriggerAudioProcessor::createEditor()
 }
 
 //==============================================================================
-// State: parameters + where each slot's sound came from
-void AuroraTriggerAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+// State: parameters + where each slot's sound came from (+ preset name).
+// Used for the DAW session and for .atpreset files.
+juce::ValueTree AuroraTriggerAudioProcessor::createStateTree()
 {
     auto state = apvts.copyState();
     state.removeChild (state.getChildWithName ("SLOTS"), nullptr);
+    state.setProperty ("presetName", getPresetName(), nullptr);
 
     juce::ValueTree slotsTree ("SLOTS");
     {
@@ -860,24 +862,22 @@ void AuroraTriggerAudioProcessor::getStateInformation (juce::MemoryBlock& destDa
         }
     }
     state.appendChild (slotsTree, nullptr);
-
-    std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    copyXmlToBinary (*xml, destData);
+    return state;
 }
 
-void AuroraTriggerAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+bool AuroraTriggerAudioProcessor::applyStateTree (juce::ValueTree tree)
 {
-    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
-    if (xmlState == nullptr || ! xmlState->hasTagName (apvts.state.getType()))
-        return;
+    if (! tree.isValid() || ! tree.hasType (apvts.state.getType()))
+        return false;
 
-    auto tree = juce::ValueTree::fromXml (*xmlState);
     auto slotsTree = tree.getChildWithName ("SLOTS");
     tree.removeChild (slotsTree, nullptr);
+    if (tree.hasProperty ("presetName"))
+        setPresetName (tree.getProperty ("presetName").toString());
     apvts.replaceState (tree);
 
     if (! slotsTree.isValid())
-        return; // session from v0.2.0: keep the default kit
+        return true; // session from v0.2.0: keep the default kit
 
     for (const auto& st : slotsTree)
     {
@@ -913,6 +913,84 @@ void AuroraTriggerAudioProcessor::setStateInformation (const void* data, int siz
             clearSlotSamples (i);
         }
     }
+    return true;
+}
+
+void AuroraTriggerAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    std::unique_ptr<juce::XmlElement> xml (createStateTree().createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void AuroraTriggerAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState != nullptr)
+        applyStateTree (juce::ValueTree::fromXml (*xmlState));
+}
+
+//==============================================================================
+// Presets (.atpreset = the same XML as the session state)
+juce::String AuroraTriggerAudioProcessor::getPresetName() const
+{
+    const juce::ScopedLock sl (presetNameLock);
+    return presetName;
+}
+
+void AuroraTriggerAudioProcessor::setPresetName (const juce::String& name)
+{
+    const juce::ScopedLock sl (presetNameLock);
+    presetName = name;
+}
+
+juce::File AuroraTriggerAudioProcessor::getPresetsFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+               .getChildFile ("Aurora Trigger").getChildFile ("Presets");
+}
+
+bool AuroraTriggerAudioProcessor::savePreset (const juce::File& file, juce::String& error)
+{
+    const auto target = file.withFileExtension (presetExtension);
+    if (! target.getParentDirectory().createDirectory())
+    {
+        error = "Could not create the folder " + target.getParentDirectory().getFullPathName();
+        return false;
+    }
+
+    const auto previousName = getPresetName();
+    setPresetName (target.getFileNameWithoutExtension());
+    auto tree = createStateTree();
+    tree.setProperty ("auroraPresetVersion", 1, nullptr);
+
+    std::unique_ptr<juce::XmlElement> xml (tree.createXml());
+    if (xml == nullptr || ! xml->writeTo (target))
+    {
+        setPresetName (previousName);
+        error = "Could not write " + target.getFullPathName();
+        return false;
+    }
+    return true;
+}
+
+bool AuroraTriggerAudioProcessor::loadPreset (const juce::File& file, juce::String& error)
+{
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()) || ! xml->hasAttribute ("auroraPresetVersion"))
+    {
+        error = file.getFileName() + " is not an Aurora Trigger preset";
+        return false;
+    }
+
+    auto tree = juce::ValueTree::fromXml (*xml);
+    tree.setProperty ("presetName", file.getFileNameWithoutExtension(), nullptr);
+    tree.removeProperty ("auroraPresetVersion", nullptr);
+    if (! applyStateTree (tree))
+    {
+        error = "Could not apply " + file.getFileName();
+        return false;
+    }
+    return true;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

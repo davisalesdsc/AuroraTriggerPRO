@@ -268,6 +268,40 @@ void runProcessorTests (std::function<void (bool, const juce::String&)> check, s
                "path of the missing file is kept");
     }
 
+    section ("SAVE PRESET / LOAD PRESET");
+    {
+        const auto dir = tciFile.getParentDirectory();
+        juce::String err;
+        check (proc.savePreset (dir.getChildFile ("My Kit"), err), "save works: " + err);
+        const auto saved = dir.getChildFile ("My Kit.atpreset");
+        check (saved.existsAsFile(), ".atpreset extension added");
+        check (proc.getPresetName() == "My Kit", "preset name follows the file");
+
+        P other;
+        setParam (other, "slot3_dyn", 77.0f);
+        check (other.loadPreset (saved, err), "load works: " + err);
+        check (other.waitForPendingLoads (20000), "preset samples load");
+        const auto s3 = other.getSlotInfo (3);
+        check (s3.loaded && s3.numLayers == 3, "TCI slot comes back with the preset");
+        check (other.getSlotInfo (4).loaded, "WAV slot comes back");
+        check (! other.getSlotInfo (0).loaded, "empty (Init) slot stays empty");
+        check (std::abs (getParam (other, "slot3_dyn") - 42.0f) < 0.01f, "parameters come back");
+        check (other.getPresetName() == "My Kit", "loaded preset name is shown");
+
+        juce::MemoryBlock session;
+        other.getStateInformation (session);
+        P reopened;
+        reopened.setStateInformation (session.getData(), (int) session.getSize());
+        reopened.waitForPendingLoads (20000);
+        check (reopened.getPresetName() == "My Kit", "the DAW session remembers the preset name");
+
+        const auto fake = dir.getChildFile ("fake.atpreset");
+        fake.replaceWithText ("<hello/>");
+        check (! other.loadPreset (fake, err) && err.isNotEmpty(), "a non-preset file is refused");
+        check (! other.loadPreset (dir.getChildFile ("nothing.atpreset"), err), "a missing preset is refused");
+        check (other.getSlotInfo (3).loaded, "a refused preset changes nothing");
+    }
+
     section ("Init with links on only resets that slot");
     {
         setParam (proc, "curveLinkDynamics", 1.0f);

@@ -119,6 +119,12 @@ private:
     void showPadMenu (int slotIndex);
     void dragCapturedMidiToDaw();
 
+    // Presets
+    void savePresetDialog();
+    void showPresetMenu();
+    void loadPresetFile (const juce::File& file);
+    void showError (const juce::String& title, const juce::String& message);
+
     // Browser
     void setBrowserRoot (const juce::File& folder);
     void chooseBrowserFolder();
@@ -144,6 +150,7 @@ private:
 
     juce::ToggleButton linkTuneBtn  { "LINK TUNE" };
     juce::TextButton flipPhasesBtn  { "FLIP ALL PHASES" };
+    juce::TextButton loadPresetBtn  { "LOAD PRESET" };
     juce::TextButton savePresetBtn  { "SAVE PRESET" };
 
     juce::TextButton dragOnTrackBtn { "DRAG ON TRACK" };
@@ -180,7 +187,7 @@ private:
 
     // Browser view: a folder tree that stays on screen
     juce::TimeSliceThread browserThread { "Aurora Trigger browser" };
-    juce::WildcardFileFilter browserFilter { AuroraTriggerAudioProcessor::supportedWildcard(), "*", "Drum samples and TCI" };
+    juce::WildcardFileFilter browserFilter { AuroraTriggerAudioProcessor::supportedWildcard() + ";*.atpreset", "*", "Drum samples, TCI and presets" };
     juce::DirectoryContentsList browserList { &browserFilter, browserThread };
     juce::FileTreeComponent browserTree { browserList };
     juce::TextButton chooseFolderBtn { "Choose Folder..." };
