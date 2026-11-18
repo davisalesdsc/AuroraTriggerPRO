@@ -1,0 +1,12 @@
+name: Probe
+on: push
+jobs:
+  probe:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-26-intel, macos-latest, macos-15, macos-15-intel]
+    steps:
+      - run: uname -m; sw_vers -productVersion; xcodebuild -version | head -1
