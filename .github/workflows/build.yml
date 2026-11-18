@@ -13,20 +13,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # One native build per Mac architecture (separate installers), plus Windows
-          - name: macOS Apple Silicon (arm64)
-            os: macos-15
+          # Only the macos-26-intel runner pool was being allocated by GitHub (arm64 pools sat
+          # unassigned for 15+ min), so BOTH Mac installers are built there. The arm64 one is
+          # cross-compiled: it is checked statically (arch, min macOS, signature, installer) but
+          # cannot be executed on an Intel runner (native: false skips the run-time tests).
+          # If an arm64 runner is available, set os: macos-26 and native: true for that entry.
+          - name: macOS Apple Silicon (arm64, cross-compiled)
+            os: macos-26-intel
             label: macOS-arm64
             arch: arm64
             minos: "11.0"
+            native: false
           - name: macOS Intel (x86_64)
-            os: macos-15-intel
+            os: macos-26-intel
             label: macOS-intel
             arch: x86_64
             minos: "10.13"
+            native: true
           - name: Windows (VST3 + Standalone)
             os: windows-latest
             label: Windows
+            native: true
 
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +100,7 @@ jobs:
 
       # Install the .pkg exactly like a user would, then validate the installed plugin
       - name: Test installer + validate AU (auval)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.native
         run: |
           sudo installer -pkg "dist/AuroraTrigger-$VERSION_LABEL-${{ matrix.label }}.pkg" -target /
           test -d "/Library/Audio/Plug-Ins/Components/Aurora Trigger.component"
@@ -105,7 +112,7 @@ jobs:
 
       # Load the INSTALLED plugins the way a DAW does (VST3 + AU), process audio, open the window
       - name: Load installed plugins like a DAW (macOS, native)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.native
         run: |
           uname -m; sw_vers -productVersion
           ./build/AuroraTriggerPluginLoadTest_artefacts/Release/AuroraTriggerPluginLoadTest "/Library/Audio/Plug-Ins/VST3/Aurora Trigger.vst3"
@@ -186,7 +193,7 @@ jobs:
             echo
             echo "| Sistema | Arquivo | O que é |"
             echo "|---|---|---|"
-            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.pkg" ] && echo "| **macOS Apple Silicon** (M1/M2/M3/M4) | \`AuroraTrigger-$TAG-macOS-arm64.pkg\` | **Instalador** (AU + VST3) — recomendado |"
+            [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.pkg" ] && echo "| **macOS Apple Silicon** (M1/M2/M3/M4) | \`AuroraTrigger-$TAG-macOS-arm64.pkg\` | **Instalador** (AU + VST3) — compilado em CI, ainda não executado em máquina Apple Silicon |"
             [ -e "dist/AuroraTrigger-$TAG-macOS-intel.pkg" ] && echo "| **macOS Intel** | \`AuroraTrigger-$TAG-macOS-intel.pkg\` | **Instalador** (AU + VST3) — recomendado |"
             [ -e "dist/AuroraTrigger-$TAG-macOS-arm64.zip" ] && echo "| macOS Apple Silicon | \`AuroraTrigger-$TAG-macOS-arm64.zip\` | AU, VST3 e Standalone soltos |"
             [ -e "dist/AuroraTrigger-$TAG-macOS-intel.zip" ] && echo "| macOS Intel | \`AuroraTrigger-$TAG-macOS-intel.zip\` | AU, VST3 e Standalone soltos |"
